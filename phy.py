@@ -40,14 +40,39 @@ class phy:
 
         return waveform
 
-    def ofdm_demodulate(self, syms_in, nr_info):
+    def ofdm_demodulate(self, syms_in, nr_info, cp_fraction = 0.55):
         [n_samps, n_ants] = np.shape(syms_in);
         n_sc = nr_info.n_sc;
         n_fft = nr_info.n_fft;
         n_subframes = math.floor(n_samps/nr_info.samps_per_subframe);
-        n_syms = n_subframes * nr_info.syms_per_subframe;
-        sym_grid = np.zeros((n_sc, n_syms ));
-        pass
+        rem_syms = 0 ; #TODO: calculate num remainder symbols
+        n_syms = n_subframes * nr_info.syms_per_subframe + rem_syms;
+        sym_grid = np.empty((n_sc, n_syms ), dtype=complex);
+
+        include_zsc = 1; # TODO: dc subcarrier parameters
+        first_sc = (n_fft - n_sc) / 2;
+
+        offset = 0;
+
+        for sym in range(int(n_syms)):
+            cp_length = nr_info.cp_lengths[sym%nr_info.syms_per_slot];
+            fft_start = math.floor(cp_length * cp_fraction);
+
+            ofdm_sym = syms_in[offset + fft_start:offset + fft_start + n_fft,0]; # TODO: Multi-antenna
+
+            # Phase correction for cp fraction
+            cp_frac_phase = np.conj(np.exp(-1j*2*math.pi*(cp_length - fft_start)*np.arange(int(n_fft*1.0))/float(n_fft)));
+
+            fft_in = np.multiply(ofdm_sym, cp_frac_phase);
+            fft_out = np.fft.fftshift(np.fft.fft(fft_in));
+
+            offset += n_fft + cp_length;
+
+            # TODO: include zsc
+            sym_grid[:n_fft, sym] = fft_out[first_sc:first_sc+n_sc];
+
+
+        return sym_grid
 
     def gen_pss(self, n_cell_id):
         # TS 38.211, 7.4.2.2
@@ -96,18 +121,27 @@ class nr_numerology:
             cp_lengths[0] = 160;
             cp_lengths[7] = 160;
         cp_lengths = cp_lengths * self.n_fft / 2048.0;
-        self.cp_lengths = cp_lengths;
+
         self.syms_per_slot = len(cp_lengths);
         self.sym_lengths = cp_lengths + self.n_fft;
         scs_config = math.floor(math.log(sc_spacing/15.0, 2.0));
         scs_scale = 2**scs_config;
 
-        self.syms_per_slot = len(self.cp_lengths);
+        self.syms_per_slot = len(cp_lengths);
         self.slots_per_subframe = math.floor(14/self.syms_per_slot)*scs_scale;
         self.syms_per_subframe = self.syms_per_slot * self.slots_per_subframe;
 
-        self.samps_per_subframe = np.sum(cp_lengths) + self.n_fft * self.syms_per_subframe;
+        # Scale Cyclic prefix lengths
+        scaled_cp = cp_lengths[-1] * np.ones(self.syms_per_subframe);
+        scaled_cp[0] = scs_scale * cp_lengths[0] - (scs_scale - 1) * cp_lengths[1];
+        scaled_cp[self.syms_per_subframe/2] = scs_scale * cp_lengths[0] - (scs_scale - 1) * cp_lengths[1];
+
+        self.cp_lengths = scaled_cp;
+        self.samps_per_subframe = np.sum(self.cp_lengths) + self.n_fft * self.syms_per_subframe;
         self.subframe_period = self.samps_per_subframe / self.samp_rate;
+
+
+
 
 
 phy_test = phy();
@@ -129,14 +163,12 @@ plt.figure();
 
 nr_num = nr_numerology(n_dl_rb = n_dl_rb, sc_spacing=30);
 
-print(nr_num);
-
 pss_corr = np.zeros(3);
 pss_corr_ind = np.zeros(3);
 
 
-for cell_id in range(3):
-    pss = phy_test.gen_pss(cell_id);
+for nid2 in range(3):
+    pss = phy_test.gen_pss(nid2);
     pss_grid = np.zeros((240, 4));
     pss_grid[pss_ind,0] = pss;
 
@@ -145,7 +177,7 @@ for cell_id in range(3):
     pss_t = pss_t[np.nonzero(pss_t)];
     corr  = np.correlate(wave[:,0],pss_t)
     corr += np.correlate(wave[:, 1], pss_t)
-    pss_corr_ind[cell_id] = np.argmax(np.abs(corr));
+    pss_corr_ind[nid2] = np.argmax(np.abs(corr));
     pss_corr = np.max(np.abs(corr));
     print('ind: ' + str(np.argmax(np.abs(corr))))
     print('max: ' + str(np.max(np.abs(corr))));
@@ -153,11 +185,27 @@ for cell_id in range(3):
 
 
     plt.plot(np.abs(corr));
-pss_max_corr = np.argmax(pss_corr);
-pss_offset = pss_corr_ind[pss_max_corr];
+nid2 = np.argmax(pss_corr);
+pss_offset = pss_corr_ind[nid2] - nr_num.n_fft - nr_num.cp_lengths[0];
 
-print(pss_offset);
+demod_syms = phy_test.ofdm_demodulate(wave[pss_offset:], nr_num);
+
+print(demod_syms.shape)
+sss_syms = demod_syms[8*12 + pss_ind, 2];
+
+
+
+plt.show()
+plt.figure()
+plt.scatter(sss_syms.real, sss_syms.imag);
 plt.show()
 
+sss_corr = np.zeros(336);
+for nid1 in range(336):
+    cell_id = 3*nid1 + nid2;
+    sss_ref = phy_test.gen_sss(cell_id);
+    sss_corr[nid1] = np.sum(np.abs(np.mean(np.multiply(np.conj(sss_ref), sss_syms))) ** 2);
 
-
+plt.figure()
+plt.plot(sss_corr);
+plt.show();
