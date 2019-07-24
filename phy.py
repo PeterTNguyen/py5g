@@ -58,18 +58,21 @@ class phy:
             cp_length = nr_info.cp_lengths[sym%nr_info.syms_per_slot];
             fft_start = math.floor(cp_length * cp_fraction);
 
+            sym_offset = offset + fft_start + np.arange(n_fft);
+
             ofdm_sym = syms_in[offset + fft_start:offset + fft_start + n_fft,0]; # TODO: Multi-antenna
 
             # Phase correction for cp fraction
             cp_frac_phase = np.conj(np.exp(-1j*2*math.pi*(cp_length - fft_start)*np.arange(int(n_fft*1.0))/float(n_fft)));
 
-            fft_in = np.multiply(ofdm_sym, cp_frac_phase);
-            fft_out = np.fft.fftshift(np.fft.fft(fft_in));
+            #fft_in = np.multiply(ofdm_sym, cp_frac_phase);
+
+            fft_out = np.fft.fftshift(np.multiply(np.fft.fft(ofdm_sym), cp_frac_phase));
 
             offset += n_fft + cp_length;
 
             # TODO: include zsc
-            sym_grid[:n_fft, sym] = fft_out[first_sc:first_sc+n_sc];
+            sym_grid[:n_sc, sym] = fft_out[first_sc:first_sc+n_sc];
 
 
         return sym_grid
@@ -179,33 +182,39 @@ for nid2 in range(3):
     corr += np.correlate(wave[:, 1], pss_t)
     pss_corr_ind[nid2] = np.argmax(np.abs(corr));
     pss_corr = np.max(np.abs(corr));
-    print('ind: ' + str(np.argmax(np.abs(corr))))
+    print('ind: ' + str(np.argmax(np.abs(corr))));
     print('max: ' + str(np.max(np.abs(corr))));
 
 
 
     plt.plot(np.abs(corr));
 nid2 = np.argmax(pss_corr);
+print(nid2)
 pss_offset = pss_corr_ind[nid2] - nr_num.n_fft - nr_num.cp_lengths[0];
 
 demod_syms = phy_test.ofdm_demodulate(wave[pss_offset:], nr_num);
 
-print(demod_syms.shape)
-sss_syms = demod_syms[8*12 + pss_ind, 2];
-
-
+sss_syms = demod_syms[96 + pss_ind, 3];
 
 plt.show()
 plt.figure()
 plt.scatter(sss_syms.real, sss_syms.imag);
-plt.show()
+#plt.plot(np.unwrap(np.angle(sss_syms)));
+#print(np.angle(sss_syms));
+plt.show();
 
 sss_corr = np.zeros(336);
 for nid1 in range(336):
     cell_id = 3*nid1 + nid2;
     sss_ref = phy_test.gen_sss(cell_id);
-    sss_corr[nid1] = np.sum(np.abs(np.mean(np.multiply(np.conj(sss_ref), sss_syms))) ** 2);
+    #print(np.abs((np.multiply(np.conj(sss_ref), sss_syms))));
+
+    sss_corr[nid1] = np.sum(np.abs(np.mean(np.multiply(np.conj(sss_ref), sss_syms))) ** 2.0);
+
+nid1 = np.argmax(sss_corr);
+cell_id = 3*nid1 + nid2;
+print("NID2: " + str(nid2) + ", NID1: " + str(nid1) + ",CELL ID: " + str(cell_id));
 
 plt.figure()
-plt.plot(sss_corr);
+plt.stem(sss_corr);
 plt.show();
